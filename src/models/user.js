@@ -1,6 +1,9 @@
-import mongoose from "mongoose";
+import mongoose, { Types, model } from "mongoose";
+import uniqueValidator from "mongoose-unique-validator";
+import jwt from "jsonwebtoken";
+import bcrypt from "bcryptjs";
 
-const userSchema = new mongoose.Schema({
+const UserSchema = new mongoose.Schema({
     username: {
         type: String,
         unique: true,
@@ -47,9 +50,69 @@ const userSchema = new mongoose.Schema({
     }]
 }, {
     timestamps: true,
-}
-);
+});
 
-const User = mongoose.model('User', userSchema);
+UserSchema.plugin(uniqueValidator, { message: '{PATH} is already taken. Please try another one.' });
+
+UserSchema.methods.toJSON = function () {
+    const user = this;
+
+    const userObject = user.toObject();
+    delete userObject.password;
+    delete userObject.tokens;
+
+    return userObject;
+}
+
+UserSchema.methods.generateAuthToken = async function () {
+    const user = this;
+
+    const token = jwt.sign(
+        {
+            username: user.username,
+            email: user.email,
+            _id: user._id.toString(),
+        },
+        "This is a temporary Private Key"
+    );
+
+    user.tokens = user.tokens.concat({ token });
+    await user.save();
+
+    return token;
+}
+UserSchema.statics.findByCredentials = async (body) => {
+    const { username , email, password } = body;
+    let user;
+
+    const uniqueCredential = username ? { username } : { email }
+    if(uniqueCredential) {
+        user = await User.findOne(uniqueCredential)
+    }
+
+    if (!user) {
+        throw new Error(`Please provide a valid ${Object.keys(uniqueCredential)[0]}`);
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+
+    if(!isMatch) {
+        throw new Error('Wrong Password');
+    }
+    
+    return user;
+}
+
+UserSchema.pre('save', async function (next) {
+    const user = this;
+
+    if (user.isModified('password')) {
+        user.password = await bcrypt.hash(user.password, 10);
+    }
+
+    next();
+})
+
+const User = model('User', UserSchema);
 
 export default User;
